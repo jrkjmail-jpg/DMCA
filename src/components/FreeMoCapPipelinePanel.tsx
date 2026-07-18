@@ -34,11 +34,27 @@ export function FreeMoCapPipelinePanel({ onImportCsv }: Props) {
   useEffect(() => {
     if (!job || !["queued", "running"].includes(job.status)) return undefined;
     const timer = window.setInterval(async () => {
-      const next = await getFreeMoCapJob(job.id);
-      setJob(next);
+      try {
+        const next = await getFreeMoCapJob(job.id);
+        setJob(next);
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "Не удалось обновить статус job.");
+      }
     }, 1600);
     return () => window.clearInterval(timer);
-  }, [job]);
+  }, [job?.id, job?.status]);
+
+  async function refreshJobStatus() {
+    if (!job) return;
+    setMessage("Проверяю статус FreeMoCap job...");
+    try {
+      const next = await getFreeMoCapJob(job.id);
+      setJob(next);
+      setMessage(next.status === "complete" ? "CSV готов. Можно импортировать результат." : "Статус обновлен.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Не удалось обновить статус job.");
+    }
+  }
 
   async function uploadVideo(file: File) {
     setMessage("Видео отправляется в FreeMoCap backend...");
@@ -93,9 +109,13 @@ export function FreeMoCapPipelinePanel({ onImportCsv }: Props) {
         <strong>{job ? `Job ${job.status}` : "Нет активной задачи"}</strong>
         <span>{job?.fileName || message}</span>
         {job?.error && <span className="warning">{job.error}</span>}
+        {job && ["queued", "running"].includes(job.status) && (
+          <button onClick={refreshJobStatus}>Проверить статус</button>
+        )}
         {job?.status === "complete" && (
           <button onClick={importResult}>Импортировать CSV в анализ</button>
         )}
+        {job && <span className="muted">{message}</span>}
       </div>
     </section>
   );
