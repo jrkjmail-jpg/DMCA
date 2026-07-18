@@ -47,7 +47,7 @@ function projectRaw(point: MotionCapPoint, rotation: number): ProjectedPoint {
   const sin = Math.sin(rotation);
   const x = point.x * cos - point.z * sin;
   const z = point.x * sin + point.z * cos;
-  return { x, y: -z - point.y * 0.18 };
+  return { x, y: z - point.y * 0.18 };
 }
 
 function createViewport(frames: Array<MotionCapFrame | undefined>, width: number, height: number, rotation: number, zoom: number): Viewport {

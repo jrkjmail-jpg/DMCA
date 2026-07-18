@@ -3,7 +3,7 @@ import express from "express";
 import multer from "multer";
 import { createReadStream, existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { basename, extname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 
 const app = express();
@@ -19,6 +19,21 @@ app.use(express.json());
 
 function jobPath(jobId, ...parts) {
   return join(dataRoot, jobId, ...parts);
+}
+
+function decodeUploadFileName(name) {
+  const decoded = Buffer.from(name, "latin1").toString("utf8");
+  return decoded.includes("�") ? name : decoded;
+}
+
+function safeVideoFileName(originalName) {
+  const extension = extname(originalName).toLowerCase();
+  const base = basename(originalName, extension)
+    .normalize("NFKD")
+    .replace(/[^\w.-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48);
+  return `${base || "video"}.mp4`;
 }
 
 async function listFilesRecursive(directory) {
@@ -76,6 +91,17 @@ async function persistJob(job) {
 }
 
 async function refreshJobProgress(job) {
+  const files = await listFilesRecursive(job.recordingDir);
+  const synchronizedVideos = files.filter((file) => file.includes("/synchronized_videos/"));
+  const hasMp4Video = synchronizedVideos.some((file) => file.toLowerCase().endsWith(".mp4"));
+
+  if (job.status === "failed" && !hasMp4Video && synchronizedVideos.length) {
+    job.phase = "Видео нужно подготовить как mp4";
+    job.error = "FreeMoCap не нашел mp4-видео. Новые MOV/MP4 загрузки backend сохраняет для FreeMoCap как .mp4; загрузи это видео еще раз.";
+    await persistJob(job);
+    return job;
+  }
+
   const csvPath = await findMotionCapCsv(job.outputDir);
   if (csvPath) {
     job.status = "complete";
@@ -88,7 +114,6 @@ async function refreshJobProgress(job) {
     return job;
   }
 
-  const files = await listFilesRecursive(job.recordingDir);
   const hasAnnotatedVideo = files.some((file) => file.includes("/annotated_videos/") && file.endsWith(".mp4"));
   const hasRawData = files.some((file) => file.includes("/raw_data/"));
   const hasRecordingTable = files.some((file) => /recording_by_(frame|trajectory)\.(csv|json)$/i.test(file));
@@ -130,6 +155,13 @@ function commandForJob(job) {
     .replaceAll("{jobId}", job.id);
 }
 
+function errorMessageForPipelineFailure(log, code) {
+  if (/No videos found|Number of `\.mp4`'s.*:\s*0|synchronized_videos/i.test(log)) {
+    return "FreeMoCap не нашел mp4-видео. Я подготовил backend так, чтобы новые MOV/MP4 загрузки сохранялись для FreeMoCap как .mp4; загрузи это видео еще раз.";
+  }
+  return `FreeMoCap command exited with code ${code}.`;
+}
+
 async function runJob(job) {
   job.status = "running";
   job.progress = Math.max(job.progress || 0, 12);
@@ -165,7 +197,7 @@ async function runJob(job) {
       job.status = "failed";
       job.progress = job.progress || 0;
       job.phase = "FreeMoCap завершился с ошибкой";
-      job.error = `FreeMoCap command exited with code ${code}.`;
+      job.error = errorMessageForPipelineFailure(log, code);
       await persistJob(job);
       return;
     }
@@ -208,14 +240,17 @@ app.post("/api/freemocap/jobs", upload.single("video"), async (request, response
   await mkdir(recordingDir, { recursive: true });
   await mkdir(synchronizedVideosDir, { recursive: true });
   await mkdir(outputDir, { recursive: true });
-  const inputPath = join(synchronizedVideosDir, request.file.originalname);
+  const originalFileName = decodeUploadFileName(request.file.originalname);
+  const inputFileName = safeVideoFileName(originalFileName);
+  const inputPath = join(synchronizedVideosDir, inputFileName);
   await writeFile(inputPath, await readFile(request.file.path));
   await rm(request.file.path, { force: true });
 
   const job = {
     id,
     status: "queued",
-    fileName: request.file.originalname,
+    fileName: originalFileName,
+    processingFileName: inputFileName,
     progress: 8,
     phase: "Видео принято",
     inputPath,
