@@ -257,12 +257,44 @@ async function runJob(job) {
   });
 }
 
-app.get("/api/health", (_request, response) => {
-  response.json({
+function healthPayload() {
+  return {
     ok: true,
     configured: Boolean(process.env.FREEMOCAP_PROCESS_COMMAND),
     localFreeMoCapDetected: existsSync(localFreeMoCapPython) && existsSync(localFreeMoCapScript),
     dataRoot,
+  };
+}
+
+app.get("/api/health", (_request, response) => {
+  response.json(healthPayload());
+});
+
+app.get("/api/freemocap/health", (_request, response) => {
+  response.json(healthPayload());
+});
+
+app.get("/api/freemocap/jobs", async (_request, response) => {
+  await mkdir(dataRoot, { recursive: true });
+  const entries = existsSync(dataRoot) ? await readdir(dataRoot, { withFileTypes: true }) : [];
+  const allJobs = (
+    await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory() && entry.name !== "incoming")
+        .map((entry) => readJobFromDisk(entry.name)),
+    )
+  )
+    .filter(Boolean)
+    .map(safeJob)
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  response.json({ jobs: allJobs });
+});
+
+app.get("/api/health/details", (_request, response) => {
+  response.json({
+    ...healthPayload(),
+    node: process.version,
+    uptimeSeconds: Math.round(process.uptime()),
   });
 });
 
@@ -356,7 +388,14 @@ function safeJob(job) {
   };
 }
 
-app.listen(port, async () => {
+const server = app.listen(port, "127.0.0.1", async () => {
   await mkdir(join(dataRoot, "incoming"), { recursive: true });
   console.log(`Dance Motion Cap Analytics API listening on http://127.0.0.1:${port}`);
 });
+
+server.on("error", (error) => {
+  console.error("Dance Motion Cap Analytics API failed:", error);
+  process.exitCode = 1;
+});
+
+setInterval(() => {}, 60_000);
