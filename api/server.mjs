@@ -58,6 +58,45 @@ async function findMotionCapCsv(outputDir) {
   );
 }
 
+async function findMotionCapCsvByKind(outputDir, kind) {
+  if (!existsSync(outputDir)) return undefined;
+  const files = await listFilesRecursive(outputDir);
+  return files.find((file) => basename(file).toLowerCase() === `mediapipe_${kind}_3d_xyz.csv`);
+}
+
+function csvLines(text) {
+  return text.trim().split(/\r?\n/).filter(Boolean);
+}
+
+async function buildMotionCapCsv(outputDir, detail = "body") {
+  const kinds =
+    detail === "holistic"
+      ? ["body", "left_hand", "right_hand", "face"]
+      : detail === "body-hands"
+        ? ["body", "left_hand", "right_hand"]
+        : ["body"];
+  const tables = [];
+  for (const kind of kinds) {
+    const path = await findMotionCapCsvByKind(outputDir, kind);
+    if (!path) continue;
+    const lines = csvLines(await readFile(path, "utf8"));
+    if (lines.length < 2) continue;
+    tables.push({ kind, lines });
+  }
+  if (!tables.length) return undefined;
+
+  const rowCount = Math.min(...tables.map((table) => table.lines.length));
+  const rows = [];
+  for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+    rows.push(tables.map((table) => table.lines[rowIndex]).join(","));
+  }
+  return {
+    fileName: `freemocap_${detail}_3d_xyz.csv`,
+    text: `${rows.join("\n")}\n`,
+    pointCount: rows[0].split(",").length / 3,
+  };
+}
+
 async function readJobFromDisk(jobId) {
   const path = jobPath(jobId, "job.json");
   let job;
@@ -285,6 +324,13 @@ app.get("/api/freemocap/jobs/:id/result.csv", async (request, response) => {
   if (job) await refreshJobProgress(job);
   if (!job?.csvPath) {
     response.status(404).json({ error: "result csv not ready" });
+    return;
+  }
+  const built = await buildMotionCapCsv(job.outputDir, String(request.query.detail || "body"));
+  if (built) {
+    response.setHeader("content-type", "text/csv; charset=utf-8");
+    response.setHeader("content-disposition", `attachment; filename="${built.fileName}"`);
+    response.send(built.text);
     return;
   }
   response.setHeader("content-type", "text/csv; charset=utf-8");

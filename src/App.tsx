@@ -152,7 +152,13 @@ export default function App() {
           <MotionCapSettingsPanel left={left} right={right} />
           <ModelsPanel />
         </div>
-        <FreeMoCapPipelinePanel onImportCsv={importPipelineCsv} />
+        <FreeMoCapPipelinePanel
+          onImportCsv={importPipelineCsv}
+          onVideoSelected={(side, file) => {
+            handleVideoFile(side, file);
+            handleAudioFile(side, file);
+          }}
+        />
         <div className="upload-grid">
           <MotionCapUploadPane
             title="Эталон педагога"

@@ -19,6 +19,8 @@ export type FreeMoCapJob = {
   resultUrl?: string;
 };
 
+export type FreeMoCapPointDetail = "body" | "body-hands" | "holistic";
+
 const apiBase = import.meta.env.VITE_MOTIONCAP_API_URL || "http://127.0.0.1:8787";
 
 export async function getFreeMoCapBackendStatus(): Promise<FreeMoCapBackendStatus> {
@@ -67,12 +69,15 @@ export async function getFreeMoCapJob(jobId: string): Promise<FreeMoCapJob> {
   return response.json();
 }
 
-export async function downloadFreeMoCapCsv(job: FreeMoCapJob): Promise<{ fileName: string; text: string }> {
+export async function downloadFreeMoCapCsv(
+  job: FreeMoCapJob,
+  detail: FreeMoCapPointDetail = "body",
+): Promise<{ fileName: string; text: string }> {
   if (!job.resultUrl) throw new Error("CSV еще не готов.");
-  const response = await fetch(`${apiBase}${job.resultUrl}`);
+  const response = await fetch(`${apiBase}${job.resultUrl}?detail=${encodeURIComponent(detail)}`);
   if (!response.ok) throw new Error("Не удалось скачать CSV результата.");
   return {
-    fileName: job.csvFileName || `${job.id}_freemocap_body_3d_xyz.csv`,
+    fileName: `${job.id}_freemocap_${detail}_3d_xyz.csv`,
     text: await response.text(),
   };
 }

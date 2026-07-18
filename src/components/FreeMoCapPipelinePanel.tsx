@@ -6,12 +6,14 @@ import {
   uploadFreeMoCapVideo,
   type FreeMoCapBackendStatus,
   type FreeMoCapJob,
+  type FreeMoCapPointDetail,
 } from "../motioncap/backend/freeMoCapBackend";
 
 type Side = "left" | "right";
 
 type Props = {
   onImportCsv: (side: Side, fileName: string, text: string) => void;
+  onVideoSelected: (side: Side, file: File) => void;
 };
 
 type SlotState = {
@@ -33,14 +35,20 @@ const sideTitles: Record<Side, string> = {
   left: "Эталон педагога",
   right: "Ученик / повторение",
 };
+const detailLabels: Record<FreeMoCapPointDetail, string> = {
+  body: "33 body-точки",
+  "body-hands": "75 body + hands",
+  holistic: "553 body + hands + face",
+};
 
 const initialSlot: SlotState = {
   message: "Видео еще не загружено.",
   imported: false,
 };
 
-export function FreeMoCapPipelinePanel({ onImportCsv }: Props) {
+export function FreeMoCapPipelinePanel({ onImportCsv, onVideoSelected }: Props) {
   const [status, setStatus] = useState<FreeMoCapBackendStatus>();
+  const [pointDetail, setPointDetail] = useState<FreeMoCapPointDetail>("body");
   const [slots, setSlots] = useState<Record<Side, SlotState>>({
     left: initialSlot,
     right: initialSlot,
@@ -115,6 +123,7 @@ export function FreeMoCapPipelinePanel({ onImportCsv }: Props) {
   }
 
   async function uploadVideo(side: Side, file: File) {
+    onVideoSelected(side, file);
     updateSlot(side, {
       job: undefined,
       uploadProgress: 0,
@@ -154,7 +163,7 @@ export function FreeMoCapPipelinePanel({ onImportCsv }: Props) {
     const job = slots[side].job;
     if (!job) return;
     try {
-      const result = await downloadFreeMoCapCsv(job);
+      const result = await downloadFreeMoCapCsv(job, pointDetail);
       onImportCsv(side, result.fileName, result.text);
       updateSlot(side, { message: `CSV импортирован в "${sideTitles[side]}".`, imported: true });
     } catch (error) {
@@ -173,6 +182,17 @@ export function FreeMoCapPipelinePanel({ onImportCsv }: Props) {
       <p className="muted">
         Загрузи два видео отдельно: слева эталон педагога, справа повторение ученика. После обработки нажми импорт в нужной карточке.
       </p>
+      <div className="pipeline-detail-control">
+        <label>
+          Сколько точек импортировать
+          <select value={pointDetail} onChange={(event) => setPointDetail(event.target.value as FreeMoCapPointDetail)}>
+            <option value="body">{detailLabels.body}</option>
+            <option value="body-hands">{detailLabels["body-hands"]}</option>
+            <option value="holistic">{detailLabels.holistic}</option>
+          </select>
+        </label>
+        <span className="muted">FreeMoCap экспортирует body, hands и face отдельно; импорт объединит выбранные CSV.</span>
+      </div>
       <div className="pipeline-slot-grid">
         <PipelineSlot
           side="left"
