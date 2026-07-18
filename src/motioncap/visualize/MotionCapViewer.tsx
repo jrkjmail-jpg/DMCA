@@ -381,7 +381,6 @@ function ThreeStage({
     const cameraDistance = 6 / zoom;
     state.camera.position.set(Math.sin(rotation) * cameraDistance, 1.1, Math.cos(rotation) * cameraDistance);
     state.camera.lookAt(0, 0, 0);
-    state.group.rotation.y = rotation;
     const frame = dataset?.frames[Math.min(frameIndex, Math.max(0, (dataset?.frameCount ?? 1) - 1))];
     if (frame) drawMannequin(state.group, frame, side, bounds, dataset?.pointCount ?? 0);
     else state.group.clear();
