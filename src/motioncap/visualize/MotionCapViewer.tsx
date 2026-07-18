@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { MotionCapDataset, MotionCapFrame, MotionCapPoint } from "../dataset/motionCapSchema";
 
-type ViewerMode = "left" | "right" | "overlay";
+type Side = "left" | "right";
 
 type Props = {
   left?: MotionCapDataset;
@@ -9,19 +9,19 @@ type Props = {
 };
 
 const boneHints = [
-  ["left_shoulder", "right_shoulder"],
-  ["left_hip", "right_hip"],
-  ["left_shoulder", "left_elbow"],
-  ["left_elbow", "left_wrist"],
-  ["right_shoulder", "right_elbow"],
-  ["right_elbow", "right_wrist"],
-  ["left_hip", "left_knee"],
-  ["left_knee", "left_ankle"],
-  ["right_hip", "right_knee"],
-  ["right_knee", "right_ankle"],
-  ["left_shoulder", "left_hip"],
-  ["right_shoulder", "right_hip"],
-];
+  ["left_shoulder", "right_shoulder", 18],
+  ["left_hip", "right_hip", 18],
+  ["left_shoulder", "left_elbow", 14],
+  ["left_elbow", "left_wrist", 11],
+  ["right_shoulder", "right_elbow", 14],
+  ["right_elbow", "right_wrist", 11],
+  ["left_hip", "left_knee", 15],
+  ["left_knee", "left_ankle", 12],
+  ["right_hip", "right_knee", 15],
+  ["right_knee", "right_ankle", 12],
+  ["left_shoulder", "left_hip", 20],
+  ["right_shoulder", "right_hip", 20],
+] as const;
 
 type ProjectedPoint = {
   x: number;
@@ -34,6 +34,28 @@ type Viewport = {
   scale: number;
   padding: number;
   height: number;
+};
+
+type DrawPalette = {
+  body: string;
+  bodyLight: string;
+  joint: string;
+  outline: string;
+};
+
+const palettes: Record<Side, DrawPalette> = {
+  left: {
+    body: "#d13f40",
+    bodyLight: "rgba(209, 63, 64, .18)",
+    joint: "#9f242b",
+    outline: "rgba(120, 22, 28, .34)",
+  },
+  right: {
+    body: "#2374c9",
+    bodyLight: "rgba(35, 116, 201, .18)",
+    joint: "#13508f",
+    outline: "rgba(18, 63, 116, .34)",
+  },
 };
 
 function pointLookup(frame: MotionCapFrame, hint: string): MotionCapPoint | undefined {
@@ -50,14 +72,14 @@ function projectRaw(point: MotionCapPoint, rotation: number): ProjectedPoint {
   return { x, y: z - point.y * 0.18 };
 }
 
-function createViewport(frames: Array<MotionCapFrame | undefined>, width: number, height: number, rotation: number, zoom: number): Viewport {
-  const points = frames.flatMap((frame) => (frame ? Object.values(frame.points).map((point) => projectRaw(point, rotation)) : []));
-  if (!points.length) return { minX: -1, minY: -1, scale: 1, padding: 32, height };
+function createViewport(frame: MotionCapFrame | undefined, width: number, height: number, rotation: number, zoom: number): Viewport {
+  const points = frame ? Object.values(frame.points).map((point) => projectRaw(point, rotation)) : [];
+  if (!points.length) return { minX: -1, minY: -1, scale: 1, padding: 34, height };
   const minX = Math.min(...points.map((point) => point.x));
   const maxX = Math.max(...points.map((point) => point.x));
   const minY = Math.min(...points.map((point) => point.y));
   const maxY = Math.max(...points.map((point) => point.y));
-  const padding = 32;
+  const padding = 34;
   const scaleX = (width - padding * 2) / Math.max(1, maxX - minX);
   const scaleY = (height - padding * 2) / Math.max(1, maxY - minY);
   return {
@@ -77,35 +99,116 @@ function project(point: MotionCapPoint, viewport: Viewport, rotation: number) {
   };
 }
 
-function drawFrame(ctx: CanvasRenderingContext2D, frame: MotionCapFrame, color: string, viewport: Viewport, rotation: number) {
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
+function drawCapsule(ctx: CanvasRenderingContext2D, a: ProjectedPoint, b: ProjectedPoint, width: number, palette: DrawPalette) {
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = palette.outline;
+  ctx.lineWidth = width + 5;
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  ctx.strokeStyle = palette.body;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawEllipse(ctx: CanvasRenderingContext2D, point: ProjectedPoint, radiusX: number, radiusY: number, palette: DrawPalette) {
+  ctx.save();
+  ctx.fillStyle = palette.bodyLight;
+  ctx.strokeStyle = palette.body;
   ctx.lineWidth = 2;
-  for (const [from, to] of boneHints) {
-    const a = pointLookup(frame, from);
-    const b = pointLookup(frame, to);
-    if (!a || !b) continue;
-    const pa = project(a, viewport, rotation);
-    const pb = project(b, viewport, rotation);
-    ctx.beginPath();
-    ctx.moveTo(pa.x, pa.y);
-    ctx.lineTo(pb.x, pb.y);
-    ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(point.x, point.y, radiusX, radiusY, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawBodyFrame(ctx: CanvasRenderingContext2D, frame: MotionCapFrame, side: Side, viewport: Viewport, rotation: number) {
+  const palette = palettes[side];
+  const projected = (hint: string) => {
+    const point = pointLookup(frame, hint);
+    return point ? project(point, viewport, rotation) : undefined;
+  };
+
+  const leftShoulder = projected("left_shoulder");
+  const rightShoulder = projected("right_shoulder");
+  const leftHip = projected("left_hip");
+  const rightHip = projected("right_hip");
+  const nose = projected("nose");
+
+  if (leftShoulder && rightShoulder && leftHip && rightHip) {
+    const chest = {
+      x: (leftShoulder.x + rightShoulder.x + leftHip.x + rightHip.x) / 4,
+      y: (leftShoulder.y + rightShoulder.y + leftHip.y + rightHip.y) / 4,
+    };
+    const torsoWidth = Math.max(28, Math.abs(leftShoulder.x - rightShoulder.x) + 18);
+    const torsoHeight = Math.max(36, Math.abs((leftShoulder.y + rightShoulder.y) / 2 - (leftHip.y + rightHip.y) / 2) + 18);
+    drawEllipse(ctx, chest, torsoWidth / 2, torsoHeight / 2, palette);
   }
+
+  if (nose) drawEllipse(ctx, nose, 13, 15, palette);
+
+  for (const [from, to, width] of boneHints) {
+    const a = projected(from);
+    const b = projected(to);
+    if (!a || !b) continue;
+    drawCapsule(ctx, a, b, width, palette);
+  }
+
   Object.values(frame.points).forEach((point) => {
-    const projected = project(point, viewport, rotation);
+    const dot = project(point, viewport, rotation);
+    ctx.fillStyle = palette.joint;
     ctx.beginPath();
-    ctx.arc(projected.x, projected.y, 3, 0, Math.PI * 2);
+    ctx.arc(dot.x, dot.y, 4, 0, Math.PI * 2);
     ctx.fill();
   });
 }
 
+function drawScene(
+  canvas: HTMLCanvasElement | null,
+  dataset: MotionCapDataset | undefined,
+  side: Side,
+  frameIndex: number,
+  zoom: number,
+  rotation: number,
+) {
+  const ctx = canvas?.getContext("2d");
+  if (!canvas || !ctx) return;
+  const ratio = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * ratio;
+  canvas.height = rect.height * ratio;
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, rect.width, rect.height);
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--panel");
+  ctx.fillRect(0, 0, rect.width, rect.height);
+  ctx.strokeStyle = "rgba(0,0,0,.14)";
+  ctx.beginPath();
+  ctx.moveTo(0, rect.height / 2);
+  ctx.lineTo(rect.width, rect.height / 2);
+  ctx.moveTo(rect.width / 2, 0);
+  ctx.lineTo(rect.width / 2, rect.height);
+  ctx.stroke();
+
+  const frame = dataset?.frames[Math.min(frameIndex, Math.max(0, (dataset?.frameCount ?? 1) - 1))];
+  if (!frame) return;
+  const viewport = createViewport(frame, rect.width, rect.height, rotation, zoom);
+  drawBodyFrame(ctx, frame, side, viewport, rotation);
+}
+
 export function MotionCapViewer({ left, right }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [mode, setMode] = useState<ViewerMode>("overlay");
+  const leftCanvasRef = useRef<HTMLCanvasElement>(null);
+  const rightCanvasRef = useRef<HTMLCanvasElement>(null);
   const [frame, setFrame] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [zoom, setZoom] = useState(82);
+  const [zoom, setZoom] = useState(86);
   const [rotation, setRotation] = useState(0);
   const maxFrames = useMemo(() => Math.max(left?.frameCount ?? 0, right?.frameCount ?? 0), [left, right]);
 
@@ -116,50 +219,21 @@ export function MotionCapViewer({ left, right }: Props) {
   }, [playing, maxFrames]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-    const ratio = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * ratio;
-    canvas.height = rect.height * ratio;
-    ctx.scale(ratio, ratio);
-    ctx.clearRect(0, 0, rect.width, rect.height);
-    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--panel");
-    ctx.fillRect(0, 0, rect.width, rect.height);
-    ctx.strokeStyle = "rgba(0,0,0,.16)";
-    ctx.beginPath();
-    ctx.moveTo(0, rect.height / 2);
-    ctx.lineTo(rect.width, rect.height / 2);
-    ctx.moveTo(rect.width / 2, 0);
-    ctx.lineTo(rect.width / 2, rect.height);
-    ctx.stroke();
-
-    const leftFrame = (mode === "left" || mode === "overlay") ? left?.frames[frame] : undefined;
-    const rightFrame = (mode === "right" || mode === "overlay") ? right?.frames[frame] : undefined;
-    const viewport = createViewport([leftFrame, rightFrame], rect.width, rect.height, rotation, zoom);
-    if (leftFrame) drawFrame(ctx, leftFrame, "#d13f40", viewport, rotation);
-    if (rightFrame) drawFrame(ctx, rightFrame, "#2374c9", viewport, rotation);
-  }, [left, right, frame, mode, zoom, rotation]);
+    drawScene(leftCanvasRef.current, left, "left", frame, zoom, rotation);
+    drawScene(rightCanvasRef.current, right, "right", frame, zoom, rotation);
+  }, [left, right, frame, zoom, rotation]);
 
   return (
     <section className="panel visualizer">
       <div className="panel-title-row">
-        <h2>3D визуализация скелетов</h2>
+        <h2>3D визуализация движений</h2>
         <span className="muted">
           Эталон: {left ? `${left.frameCount} кадров` : "нет"} · Ученик: {right ? `${right.frameCount} кадров` : "нет"}
         </span>
-        <div className="segmented" aria-label="Режим визуализации">
-          {(["left", "right", "overlay"] as ViewerMode[]).map((item) => (
-            <button key={item} className={mode === item ? "active" : ""} onClick={() => setMode(item)}>
-              {item === "left" ? "Эталон" : item === "right" ? "Ученик" : "Наложение"}
-            </button>
-          ))}
-        </div>
       </div>
-      <div className="canvas-wrap">
-        {!left && !right && <div className="canvas-empty">Импортируй CSV эталона или ученика, и здесь появится скелет.</div>}
-        <canvas ref={canvasRef} className="skeleton-canvas" aria-label="Проекция 3D-скелетов X/Z" />
+      <div className="viewer-split">
+        <ViewerStage title="Эталон педагога" dataset={left} canvasRef={leftCanvasRef} />
+        <ViewerStage title="Ученик / повторение" dataset={right} canvasRef={rightCanvasRef} />
       </div>
       <div className="viewer-controls">
         <button onClick={() => setPlaying((value) => !value)}>{playing ? "Пауза" : "Play"}</button>
@@ -174,7 +248,7 @@ export function MotionCapViewer({ left, right }: Props) {
         <button onClick={() => setFrame((value) => Math.min(Math.max(0, maxFrames - 1), value + 1))}>+1</button>
         <label>
           Масштаб
-          <input type="range" min="40" max="160" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} />
+          <input type="range" min="45" max="170" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} />
         </label>
         <label>
           Камера
@@ -188,7 +262,7 @@ export function MotionCapViewer({ left, right }: Props) {
         </label>
         <button
           onClick={() => {
-            setZoom(82);
+            setZoom(86);
             setRotation(0);
           }}
         >
@@ -197,5 +271,28 @@ export function MotionCapViewer({ left, right }: Props) {
         <span className="muted">Кадр {Math.min(frame, Math.max(0, maxFrames - 1))}</span>
       </div>
     </section>
+  );
+}
+
+function ViewerStage({
+  title,
+  dataset,
+  canvasRef,
+}: {
+  title: string;
+  dataset?: MotionCapDataset;
+  canvasRef: RefObject<HTMLCanvasElement | null>;
+}) {
+  return (
+    <div className="viewer-stage">
+      <div className="viewer-stage-title">
+        <strong>{title}</strong>
+        <span>{dataset ? `${dataset.frameCount} кадров` : "нет данных"}</span>
+      </div>
+      <div className="canvas-wrap">
+        {!dataset && <div className="canvas-empty">Импортируй CSV, и здесь появится движущаяся 3D-форма.</div>}
+        <canvas ref={canvasRef} className="skeleton-canvas" aria-label={`${title}: 3D-форма по FreeMoCap данным`} />
+      </div>
+    </div>
   );
 }
