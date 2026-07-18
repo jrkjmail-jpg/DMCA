@@ -3,14 +3,14 @@ export function DataSourcePanel() {
     <section className="panel source-panel">
       <h2>Источник MotionCap данных</h2>
       <div className="source-grid">
-        {["FreeMoCap CSV", "FreeMoCap JSON", "FreeMoCap recording folder", "Видео + аудио", "В будущем: FreeMoCap backend"].map((source) => (
+        {["Видео через FreeMoCap", "FreeMoCap CSV", "FreeMoCap JSON", "Видео для просмотра", "История анализа"].map((source) => (
           <div className="source-item" key={source}>
             {source}
           </div>
         ))}
       </div>
       <p className="muted">
-        Этап v0.1.0 импортирует готовые FreeMoCap CSV/JSON exports, отдельное видео и аудио/видео для ручной синхронизации.
+        Сейчас можно загрузить видео в локальный FreeMoCap backend или импортировать готовый CSV/JSON export.
       </p>
     </section>
   );

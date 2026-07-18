@@ -118,6 +118,11 @@ main {
   box-shadow: var(--shadow);
 }
 
+.pipeline-panel {
+  border-color: color-mix(in srgb, var(--accent), var(--line) 34%);
+  background: color-mix(in srgb, var(--accent), #ffffff 96%);
+}
+
 .panel h2,
 .upload-pane h2 {
   margin: 0 0 12px;

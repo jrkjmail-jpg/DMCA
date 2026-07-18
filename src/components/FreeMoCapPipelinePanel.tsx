@@ -61,13 +61,13 @@ export function FreeMoCapPipelinePanel({ onImportCsv }: Props) {
   return (
     <section className="panel pipeline-panel">
       <div className="panel-title-row">
-        <h2>Обработка видео через FreeMoCap</h2>
+        <h2>Загрузка видео в FreeMoCap</h2>
         <span className={status?.configured || status?.localFreeMoCapDetected ? "backend-ok" : "backend-warn"}>
           {status?.configured || status?.localFreeMoCapDetected ? "FreeMoCap ready" : "local backend"}
         </span>
       </div>
       <p className="muted">
-        Загрузи видео сюда, если хочешь получить MotionCap CSV автоматически. Это работает через локальный/server backend, не внутри Cloudflare Pages.
+        Это главный загрузчик для видео. Выбери, куда положить результат, затем загрузи файл танца: backend обработает его через локальный FreeMoCap и вернет MotionCap CSV.
       </p>
       <div className="pipeline-controls">
         <label>

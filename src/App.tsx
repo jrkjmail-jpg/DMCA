@@ -153,6 +153,7 @@ export default function App() {
           <MotionCapSettingsPanel left={left} right={right} />
           <ModelsPanel />
         </div>
+        <FreeMoCapPipelinePanel onImportCsv={importPipelineCsv} />
         <div className="upload-grid">
           <MotionCapUploadPane
             title="Эталон педагога"
@@ -175,7 +176,6 @@ export default function App() {
             onAudioFile={(file) => handleAudioFile("right", file)}
           />
         </div>
-        <FreeMoCapPipelinePanel onImportCsv={importPipelineCsv} />
         <AudioSyncTimeline
           leftWaveform={media.left.audioWaveform}
           rightWaveform={media.right.audioWaveform}
