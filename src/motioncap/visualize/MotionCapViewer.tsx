@@ -23,25 +23,61 @@ const boneHints = [
   ["right_shoulder", "right_hip"],
 ];
 
+type ProjectedPoint = {
+  x: number;
+  y: number;
+};
+
+type Viewport = {
+  minX: number;
+  minY: number;
+  scale: number;
+  padding: number;
+  height: number;
+};
+
 function pointLookup(frame: MotionCapFrame, hint: string): MotionCapPoint | undefined {
   const exact = frame.points[hint];
   if (exact) return exact;
   return Object.values(frame.points).find((point) => point.name.toLowerCase().includes(hint));
 }
 
-function project(point: MotionCapPoint, width: number, height: number, zoom: number, rotation: number) {
+function projectRaw(point: MotionCapPoint, rotation: number): ProjectedPoint {
   const cos = Math.cos(rotation);
   const sin = Math.sin(rotation);
   const x = point.x * cos - point.z * sin;
   const z = point.x * sin + point.z * cos;
+  return { x, y: -z - point.y * 0.18 };
+}
+
+function createViewport(frames: Array<MotionCapFrame | undefined>, width: number, height: number, rotation: number, zoom: number): Viewport {
+  const points = frames.flatMap((frame) => (frame ? Object.values(frame.points).map((point) => projectRaw(point, rotation)) : []));
+  if (!points.length) return { minX: -1, minY: -1, scale: 1, padding: 32, height };
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  const padding = 32;
+  const scaleX = (width - padding * 2) / Math.max(1, maxX - minX);
+  const scaleY = (height - padding * 2) / Math.max(1, maxY - minY);
   return {
-    x: width / 2 + x * zoom,
-    y: height / 2 - (point.y * zoom - z * zoom * 0.22),
+    minX,
+    minY,
+    scale: Math.min(scaleX, scaleY) * (zoom / 100),
+    padding,
+    height,
   };
 }
 
-function drawFrame(ctx: CanvasRenderingContext2D, frame: MotionCapFrame, color: string, zoom: number, rotation: number) {
-  const { width, height } = ctx.canvas;
+function project(point: MotionCapPoint, viewport: Viewport, rotation: number) {
+  const raw = projectRaw(point, rotation);
+  return {
+    x: viewport.padding + (raw.x - viewport.minX) * viewport.scale,
+    y: viewport.height - viewport.padding - (raw.y - viewport.minY) * viewport.scale,
+  };
+}
+
+function drawFrame(ctx: CanvasRenderingContext2D, frame: MotionCapFrame, color: string, viewport: Viewport, rotation: number) {
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
   ctx.lineWidth = 2;
@@ -49,15 +85,15 @@ function drawFrame(ctx: CanvasRenderingContext2D, frame: MotionCapFrame, color: 
     const a = pointLookup(frame, from);
     const b = pointLookup(frame, to);
     if (!a || !b) continue;
-    const pa = project(a, width, height, zoom, rotation);
-    const pb = project(b, width, height, zoom, rotation);
+    const pa = project(a, viewport, rotation);
+    const pb = project(b, viewport, rotation);
     ctx.beginPath();
     ctx.moveTo(pa.x, pa.y);
     ctx.lineTo(pb.x, pb.y);
     ctx.stroke();
   }
   Object.values(frame.points).forEach((point) => {
-    const projected = project(point, width, height, zoom, rotation);
+    const projected = project(point, viewport, rotation);
     ctx.beginPath();
     ctx.arc(projected.x, projected.y, 3, 0, Math.PI * 2);
     ctx.fill();
@@ -69,7 +105,7 @@ export function MotionCapViewer({ left, right }: Props) {
   const [mode, setMode] = useState<ViewerMode>("overlay");
   const [frame, setFrame] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [zoom, setZoom] = useState(42);
+  const [zoom, setZoom] = useState(82);
   const [rotation, setRotation] = useState(0);
   const maxFrames = useMemo(() => Math.max(left?.frameCount ?? 0, right?.frameCount ?? 0), [left, right]);
 
@@ -99,14 +135,20 @@ export function MotionCapViewer({ left, right }: Props) {
     ctx.lineTo(rect.width / 2, rect.height);
     ctx.stroke();
 
-    if ((mode === "left" || mode === "overlay") && left?.frames[frame]) drawFrame(ctx, left.frames[frame], "#d13f40", zoom, rotation);
-    if ((mode === "right" || mode === "overlay") && right?.frames[frame]) drawFrame(ctx, right.frames[frame], "#2374c9", zoom, rotation);
+    const leftFrame = (mode === "left" || mode === "overlay") ? left?.frames[frame] : undefined;
+    const rightFrame = (mode === "right" || mode === "overlay") ? right?.frames[frame] : undefined;
+    const viewport = createViewport([leftFrame, rightFrame], rect.width, rect.height, rotation, zoom);
+    if (leftFrame) drawFrame(ctx, leftFrame, "#d13f40", viewport, rotation);
+    if (rightFrame) drawFrame(ctx, rightFrame, "#2374c9", viewport, rotation);
   }, [left, right, frame, mode, zoom, rotation]);
 
   return (
     <section className="panel visualizer">
       <div className="panel-title-row">
         <h2>3D визуализация скелетов</h2>
+        <span className="muted">
+          Эталон: {left ? `${left.frameCount} кадров` : "нет"} · Ученик: {right ? `${right.frameCount} кадров` : "нет"}
+        </span>
         <div className="segmented" aria-label="Режим визуализации">
           {(["left", "right", "overlay"] as ViewerMode[]).map((item) => (
             <button key={item} className={mode === item ? "active" : ""} onClick={() => setMode(item)}>
@@ -115,7 +157,10 @@ export function MotionCapViewer({ left, right }: Props) {
           ))}
         </div>
       </div>
-      <canvas ref={canvasRef} className="skeleton-canvas" aria-label="Проекция 3D-скелетов X/Z" />
+      <div className="canvas-wrap">
+        {!left && !right && <div className="canvas-empty">Импортируй CSV эталона или ученика, и здесь появится скелет.</div>}
+        <canvas ref={canvasRef} className="skeleton-canvas" aria-label="Проекция 3D-скелетов X/Z" />
+      </div>
       <div className="viewer-controls">
         <button onClick={() => setPlaying((value) => !value)}>{playing ? "Пауза" : "Play"}</button>
         <button onClick={() => setFrame((value) => Math.max(0, value - 1))}>-1</button>
@@ -129,7 +174,7 @@ export function MotionCapViewer({ left, right }: Props) {
         <button onClick={() => setFrame((value) => Math.min(Math.max(0, maxFrames - 1), value + 1))}>+1</button>
         <label>
           Масштаб
-          <input type="range" min="12" max="120" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} />
+          <input type="range" min="40" max="160" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} />
         </label>
         <label>
           Камера
@@ -143,7 +188,7 @@ export function MotionCapViewer({ left, right }: Props) {
         </label>
         <button
           onClick={() => {
-            setZoom(42);
+            setZoom(82);
             setRotation(0);
           }}
         >

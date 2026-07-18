@@ -8,109 +8,158 @@ import {
   type FreeMoCapJob,
 } from "../motioncap/backend/freeMoCapBackend";
 
+type Side = "left" | "right";
+
 type Props = {
-  onImportCsv: (side: "left" | "right", fileName: string, text: string) => void;
+  onImportCsv: (side: Side, fileName: string, text: string) => void;
 };
 
-const activeJobStorageKey = "dmca.activeFreeMoCapJob";
+type SlotState = {
+  job?: FreeMoCapJob;
+  uploadProgress?: number;
+  message: string;
+  imported: boolean;
+};
 
-type StoredJobState = {
+type StoredJobsState = Partial<Record<Side, string>>;
+type LegacyStoredJobState = {
   jobId: string;
-  side: "left" | "right";
+  side: Side;
+};
+
+const activeJobsStorageKey = "dmca.activeFreeMoCapJobs";
+const legacyActiveJobStorageKey = "dmca.activeFreeMoCapJob";
+const sideTitles: Record<Side, string> = {
+  left: "Эталон педагога",
+  right: "Ученик / повторение",
+};
+
+const initialSlot: SlotState = {
+  message: "Видео еще не загружено.",
+  imported: false,
 };
 
 export function FreeMoCapPipelinePanel({ onImportCsv }: Props) {
-  const [side, setSide] = useState<"left" | "right">("left");
   const [status, setStatus] = useState<FreeMoCapBackendStatus>();
-  const [job, setJob] = useState<FreeMoCapJob>();
-  const [uploadProgress, setUploadProgress] = useState<number>();
-  const [message, setMessage] = useState<string>("Backend еще не проверен.");
+  const [slots, setSlots] = useState<Record<Side, SlotState>>({
+    left: initialSlot,
+    right: initialSlot,
+  });
 
   useEffect(() => {
     getFreeMoCapBackendStatus()
-      .then((next) => {
-        setStatus(next);
-        setMessage(
-          next.configured || next.localFreeMoCapDetected
-            ? "Backend готов к запуску локального FreeMoCap pipeline."
-            : "Backend работает, но команда FreeMoCap pipeline еще не настроена.",
-        );
-      })
-      .catch(() => setMessage("Backend не запущен. Для обработки видео нужен `npm run api`."));
+      .then(setStatus)
+      .catch(() => {
+        setSlots((current) => ({
+          left: { ...current.left, message: "Backend не запущен. Для обработки видео нужен `npm run api`." },
+          right: { ...current.right, message: "Backend не запущен. Для обработки видео нужен `npm run api`." },
+        }));
+      });
   }, []);
 
   useEffect(() => {
-    const raw = window.localStorage.getItem(activeJobStorageKey);
-    if (!raw) return;
+    const raw = window.localStorage.getItem(activeJobsStorageKey);
+    const legacyRaw = window.localStorage.getItem(legacyActiveJobStorageKey);
+    let stored: StoredJobsState = {};
     try {
-      const stored = JSON.parse(raw) as StoredJobState;
-      setSide(stored.side);
-      getFreeMoCapJob(stored.jobId)
-        .then((next) => {
-          setJob(next);
-          setMessage(next.status === "complete" ? "CSV готов. Можно импортировать результат." : "Восстановил активную FreeMoCap задачу.");
-        })
-        .catch(() => {
-          window.localStorage.removeItem(activeJobStorageKey);
-          setMessage("Предыдущая FreeMoCap задача не найдена. Можно загрузить видео заново.");
-        });
+      if (raw) stored = JSON.parse(raw) as StoredJobsState;
+      if (!raw && legacyRaw) {
+        const legacy = JSON.parse(legacyRaw) as LegacyStoredJobState;
+        stored[legacy.side] = legacy.jobId;
+      }
+      (["left", "right"] as Side[]).forEach((side) => {
+        const jobId = stored[side];
+        if (!jobId) return;
+        getFreeMoCapJob(jobId)
+          .then((job) => updateSlot(side, {
+            job,
+            message: job.status === "complete" ? "CSV готов. Можно импортировать результат." : "Восстановил задачу после перезагрузки.",
+          }))
+          .catch(() => forgetJob(side));
+      });
+      if (legacyRaw) window.localStorage.removeItem(legacyActiveJobStorageKey);
     } catch {
-      window.localStorage.removeItem(activeJobStorageKey);
+      window.localStorage.removeItem(activeJobsStorageKey);
+      window.localStorage.removeItem(legacyActiveJobStorageKey);
     }
   }, []);
 
   useEffect(() => {
-    if (!job) return;
-    const stored: StoredJobState = { jobId: job.id, side };
-    window.localStorage.setItem(activeJobStorageKey, JSON.stringify(stored));
-  }, [job?.id, side]);
+    const stored: StoredJobsState = {};
+    (["left", "right"] as Side[]).forEach((side) => {
+      const jobId = slots[side].job?.id;
+      if (jobId && !slots[side].imported) stored[side] = jobId;
+    });
+    window.localStorage.setItem(activeJobsStorageKey, JSON.stringify(stored));
+  }, [slots.left.job?.id, slots.left.imported, slots.right.job?.id, slots.right.imported]);
 
   useEffect(() => {
-    if (!job || !["queued", "running"].includes(job.status)) return undefined;
-    const timer = window.setInterval(async () => {
-      try {
-        const next = await getFreeMoCapJob(job.id);
-        setJob(next);
-      } catch (error) {
-        setMessage(error instanceof Error ? error.message : "Не удалось обновить статус job.");
-      }
+    const runningSides = (["left", "right"] as Side[]).filter((side) => {
+      const status = slots[side].job?.status;
+      return status === "queued" || status === "running";
+    });
+    if (!runningSides.length) return undefined;
+
+    const timer = window.setInterval(() => {
+      runningSides.forEach((side) => refreshJobStatus(side));
     }, 1600);
     return () => window.clearInterval(timer);
-  }, [job?.id, job?.status]);
+  }, [slots.left.job?.id, slots.left.job?.status, slots.right.job?.id, slots.right.job?.status]);
 
-  async function refreshJobStatus() {
+  function updateSlot(side: Side, patch: Partial<SlotState>) {
+    setSlots((current) => ({ ...current, [side]: { ...current[side], ...patch } }));
+  }
+
+  function forgetJob(side: Side) {
+    updateSlot(side, { job: undefined, uploadProgress: undefined, message: "Задача не найдена. Можно загрузить видео заново.", imported: false });
+  }
+
+  async function uploadVideo(side: Side, file: File) {
+    updateSlot(side, {
+      job: undefined,
+      uploadProgress: 0,
+      message: "Видео загружается на локальный backend...",
+      imported: false,
+    });
+    try {
+      const job = await uploadFreeMoCapVideo(file, (progress) => updateSlot(side, { uploadProgress: progress }));
+      updateSlot(side, {
+        job,
+        uploadProgress: 100,
+        message: "Видео загружено. FreeMoCap начал обработку.",
+      });
+    } catch (error) {
+      updateSlot(side, {
+        uploadProgress: undefined,
+        message: error instanceof Error ? error.message : "Не удалось создать job.",
+      });
+    }
+  }
+
+  async function refreshJobStatus(side: Side) {
+    const job = slots[side].job;
     if (!job) return;
-    setMessage("Проверяю статус FreeMoCap job...");
     try {
       const next = await getFreeMoCapJob(job.id);
-      setJob(next);
-      setMessage(next.status === "complete" ? "CSV готов. Можно импортировать результат." : "Статус обновлен.");
+      updateSlot(side, {
+        job: next,
+        message: next.status === "complete" ? "CSV готов. Можно импортировать результат." : "Статус обновлен.",
+      });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Не удалось обновить статус job.");
+      updateSlot(side, { message: error instanceof Error ? error.message : "Не удалось обновить статус job." });
     }
   }
 
-  async function uploadVideo(file: File) {
-    setUploadProgress(0);
-    setJob(undefined);
-    setMessage("Видео загружается на локальный backend...");
-    try {
-      const next = await uploadFreeMoCapVideo(file, setUploadProgress);
-      setJob(next);
-      setUploadProgress(100);
-      setMessage("Видео загружено. FreeMoCap начал обработку.");
-    } catch (error) {
-      setUploadProgress(undefined);
-      setMessage(error instanceof Error ? error.message : "Не удалось создать job.");
-    }
-  }
-
-  async function importResult() {
+  async function importResult(side: Side) {
+    const job = slots[side].job;
     if (!job) return;
-    const result = await downloadFreeMoCapCsv(job);
-    onImportCsv(side, result.fileName, result.text);
-    window.localStorage.removeItem(activeJobStorageKey);
-    setMessage("CSV результата импортирован в выбранную сторону анализа.");
+    try {
+      const result = await downloadFreeMoCapCsv(job);
+      onImportCsv(side, result.fileName, result.text);
+      updateSlot(side, { message: `CSV импортирован в "${sideTitles[side]}".`, imported: true });
+    } catch (error) {
+      updateSlot(side, { message: error instanceof Error ? error.message : "Не удалось импортировать CSV." });
+    }
   }
 
   return (
@@ -122,45 +171,78 @@ export function FreeMoCapPipelinePanel({ onImportCsv }: Props) {
         </span>
       </div>
       <p className="muted">
-        Это главный загрузчик для видео. Выбери, куда положить результат, затем загрузи файл танца: backend обработает его через локальный FreeMoCap и вернет MotionCap CSV.
+        Загрузи два видео отдельно: слева эталон педагога, справа повторение ученика. После обработки нажми импорт в нужной карточке.
       </p>
-      <div className="pipeline-controls">
-        <label>
-          Куда импортировать результат
-          <select value={side} onChange={(event) => setSide(event.target.value as "left" | "right")}>
-            <option value="left">Эталон педагога</option>
-            <option value="right">Ученик / повторение</option>
-          </select>
-        </label>
-        <label>
-          Видео для FreeMoCap
-          <input
-            type="file"
-            accept="video/*"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) uploadVideo(file);
-            }}
-          />
-        </label>
-      </div>
-      <div className="pipeline-status">
-        <strong>{job ? `Job ${job.status}` : "Нет активной задачи"}</strong>
-        <span>{job?.fileName || message}</span>
-        {uploadProgress !== undefined && uploadProgress < 100 && (
-          <ProgressRow label="Загрузка видео" progress={uploadProgress} />
-        )}
-        {job && <ProgressRow label={job.phase || "Обработка FreeMoCap"} progress={job.progress} />}
-        {job?.error && <span className="warning">{job.error}</span>}
-        {job && ["queued", "running"].includes(job.status) && (
-          <button onClick={refreshJobStatus}>Проверить статус</button>
-        )}
-        {job?.status === "complete" && (
-          <button onClick={importResult}>Импортировать CSV в анализ</button>
-        )}
-        {job && <span className="muted">{message}</span>}
+      <div className="pipeline-slot-grid">
+        <PipelineSlot
+          side="left"
+          title="1. Видео эталона"
+          state={slots.left}
+          onUpload={uploadVideo}
+          onRefresh={refreshJobStatus}
+          onImport={importResult}
+        />
+        <PipelineSlot
+          side="right"
+          title="2. Видео ученика"
+          state={slots.right}
+          onUpload={uploadVideo}
+          onRefresh={refreshJobStatus}
+          onImport={importResult}
+        />
       </div>
     </section>
+  );
+}
+
+function PipelineSlot({
+  side,
+  title,
+  state,
+  onUpload,
+  onRefresh,
+  onImport,
+}: {
+  side: Side;
+  title: string;
+  state: SlotState;
+  onUpload: (side: Side, file: File) => void;
+  onRefresh: (side: Side) => void;
+  onImport: (side: Side) => void;
+}) {
+  const isWorking = state.job?.status === "queued" || state.job?.status === "running";
+  return (
+    <div className="pipeline-slot">
+      <h3>{title}</h3>
+      <label>
+        Видео для FreeMoCap
+        <input
+          type="file"
+          accept="video/*"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) onUpload(side, file);
+          }}
+        />
+      </label>
+      <div className="pipeline-status">
+        <strong>{state.job ? `Job ${state.job.status}` : "Нет активной задачи"}</strong>
+        <span>{state.job?.fileName || state.message}</span>
+        {state.uploadProgress !== undefined && state.uploadProgress < 100 && (
+          <ProgressRow label="Загрузка видео" progress={state.uploadProgress} />
+        )}
+        {state.job && <ProgressRow label={state.job.phase || "Обработка FreeMoCap"} progress={state.job.progress} />}
+        {state.job?.error && <span className="warning">{state.job.error}</span>}
+        {isWorking && <button onClick={() => onRefresh(side)}>Проверить статус</button>}
+        {state.job?.status === "complete" && !state.imported && (
+          <button className="primary-action" onClick={() => onImport(side)}>
+            Импортировать в {sideTitles[side]}
+          </button>
+        )}
+        {state.imported && <span className="backend-ok">Импортировано в {sideTitles[side]}</span>}
+        <span className="muted">{state.message}</span>
+      </div>
+    </div>
   );
 }
 

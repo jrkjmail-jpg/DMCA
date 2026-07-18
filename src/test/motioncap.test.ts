@@ -18,6 +18,21 @@ describe("FreeMoCap CSV parser", () => {
     expect(dataset.has3d).toBe(true);
   });
 
+  it("parses FreeMoCap mediapipe_body_3d_xyz columns without an explicit frame column", () => {
+    const csv = [
+      "body_left_shoulder_x,body_left_shoulder_y,body_left_shoulder_z,body_right_shoulder_x,body_right_shoulder_y,body_right_shoulder_z,body_left_hip_x,body_left_hip_y,body_left_hip_z,body_right_hip_x,body_right_hip_y,body_right_hip_z,body_left_knee_x,body_left_knee_y,body_left_knee_z",
+      "689,0,-295,608,0,-296,668,0,-513,633,0,-508,661,0,-583",
+      "690,0,-294,609,0,-295,669,0,-512,634,0,-507,662,0,-582",
+    ].join("\n");
+
+    const dataset = parseFreeMoCapCsv("mediapipe_body_3d_xyz.csv", csv);
+
+    expect(dataset.format).toBe("wide CSV");
+    expect(dataset.frameCount).toBe(2);
+    expect(dataset.keypoints).toContain("body_left_shoulder");
+    expect(dataset.has3d).toBe(true);
+  });
+
   it("parses tidy by_frame style columns", () => {
     const csv = [
       "frame,keypoint,x,y,z",

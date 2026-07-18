@@ -37,6 +37,13 @@ button,
   cursor: pointer;
 }
 
+button.primary-action {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
@@ -257,6 +264,35 @@ video {
   font-size: 13px;
 }
 
+.pipeline-slot-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.pipeline-slot {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fff;
+}
+
+.pipeline-slot h3 {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+.pipeline-slot label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .pipeline-status {
   display: grid;
   gap: 8px;
@@ -339,6 +375,21 @@ video {
   height: 420px;
   border: 1px solid var(--line);
   border-radius: 6px;
+}
+
+.canvas-wrap {
+  position: relative;
+}
+
+.canvas-empty {
+  position: absolute;
+  inset: 1px;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  color: var(--muted);
+  text-align: center;
+  pointer-events: none;
 }
 
 .viewer-controls input[type="range"] {
@@ -429,7 +480,8 @@ video {
 
 @media (max-width: 980px) {
   .top-grid,
-  .upload-grid {
+  .upload-grid,
+  .pipeline-slot-grid {
     grid-template-columns: 1fr;
   }
 
