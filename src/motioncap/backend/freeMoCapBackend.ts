@@ -9,6 +9,8 @@ export type FreeMoCapJob = {
   id: string;
   status: "queued" | "running" | "complete" | "failed" | "needs_configuration";
   fileName: string;
+  progress: number;
+  phase?: string;
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
@@ -26,14 +28,37 @@ export async function getFreeMoCapBackendStatus(): Promise<FreeMoCapBackendStatu
 }
 
 export async function createFreeMoCapJob(video: File): Promise<FreeMoCapJob> {
+  return uploadFreeMoCapVideo(video);
+}
+
+export function uploadFreeMoCapVideo(
+  video: File,
+  onUploadProgress?: (progress: number) => void,
+): Promise<FreeMoCapJob> {
   const form = new FormData();
   form.append("video", video);
-  const response = await fetch(`${apiBase}/api/freemocap/jobs`, {
-    method: "POST",
-    body: form,
+
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", `${apiBase}/api/freemocap/jobs`);
+    request.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      onUploadProgress?.(Math.round((event.loaded / event.total) * 100));
+    };
+    request.onload = () => {
+      if (request.status < 200 || request.status >= 300) {
+        reject(new Error("Не удалось отправить видео в FreeMoCap backend."));
+        return;
+      }
+      try {
+        resolve(JSON.parse(request.responseText) as FreeMoCapJob);
+      } catch {
+        reject(new Error("Backend вернул некорректный ответ."));
+      }
+    };
+    request.onerror = () => reject(new Error("Не удалось подключиться к FreeMoCap backend."));
+    request.send(form);
   });
-  if (!response.ok) throw new Error("Не удалось отправить видео в FreeMoCap backend.");
-  return response.json();
 }
 
 export async function getFreeMoCapJob(jobId: string): Promise<FreeMoCapJob> {

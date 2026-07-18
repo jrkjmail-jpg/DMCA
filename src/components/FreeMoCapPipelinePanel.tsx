@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import {
-  createFreeMoCapJob,
   downloadFreeMoCapCsv,
   getFreeMoCapBackendStatus,
   getFreeMoCapJob,
+  uploadFreeMoCapVideo,
   type FreeMoCapBackendStatus,
   type FreeMoCapJob,
 } from "../motioncap/backend/freeMoCapBackend";
@@ -12,10 +12,18 @@ type Props = {
   onImportCsv: (side: "left" | "right", fileName: string, text: string) => void;
 };
 
+const activeJobStorageKey = "dmca.activeFreeMoCapJob";
+
+type StoredJobState = {
+  jobId: string;
+  side: "left" | "right";
+};
+
 export function FreeMoCapPipelinePanel({ onImportCsv }: Props) {
   const [side, setSide] = useState<"left" | "right">("left");
   const [status, setStatus] = useState<FreeMoCapBackendStatus>();
   const [job, setJob] = useState<FreeMoCapJob>();
+  const [uploadProgress, setUploadProgress] = useState<number>();
   const [message, setMessage] = useState<string>("Backend еще не проверен.");
 
   useEffect(() => {
@@ -30,6 +38,32 @@ export function FreeMoCapPipelinePanel({ onImportCsv }: Props) {
       })
       .catch(() => setMessage("Backend не запущен. Для обработки видео нужен `npm run api`."));
   }, []);
+
+  useEffect(() => {
+    const raw = window.localStorage.getItem(activeJobStorageKey);
+    if (!raw) return;
+    try {
+      const stored = JSON.parse(raw) as StoredJobState;
+      setSide(stored.side);
+      getFreeMoCapJob(stored.jobId)
+        .then((next) => {
+          setJob(next);
+          setMessage(next.status === "complete" ? "CSV готов. Можно импортировать результат." : "Восстановил активную FreeMoCap задачу.");
+        })
+        .catch(() => {
+          window.localStorage.removeItem(activeJobStorageKey);
+          setMessage("Предыдущая FreeMoCap задача не найдена. Можно загрузить видео заново.");
+        });
+    } catch {
+      window.localStorage.removeItem(activeJobStorageKey);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!job) return;
+    const stored: StoredJobState = { jobId: job.id, side };
+    window.localStorage.setItem(activeJobStorageKey, JSON.stringify(stored));
+  }, [job?.id, side]);
 
   useEffect(() => {
     if (!job || !["queued", "running"].includes(job.status)) return undefined;
@@ -57,12 +91,16 @@ export function FreeMoCapPipelinePanel({ onImportCsv }: Props) {
   }
 
   async function uploadVideo(file: File) {
-    setMessage("Видео отправляется в FreeMoCap backend...");
+    setUploadProgress(0);
+    setJob(undefined);
+    setMessage("Видео загружается на локальный backend...");
     try {
-      const next = await createFreeMoCapJob(file);
+      const next = await uploadFreeMoCapVideo(file, setUploadProgress);
       setJob(next);
-      setMessage("Job создан. Ждем обработки.");
+      setUploadProgress(100);
+      setMessage("Видео загружено. FreeMoCap начал обработку.");
     } catch (error) {
+      setUploadProgress(undefined);
       setMessage(error instanceof Error ? error.message : "Не удалось создать job.");
     }
   }
@@ -71,6 +109,7 @@ export function FreeMoCapPipelinePanel({ onImportCsv }: Props) {
     if (!job) return;
     const result = await downloadFreeMoCapCsv(job);
     onImportCsv(side, result.fileName, result.text);
+    window.localStorage.removeItem(activeJobStorageKey);
     setMessage("CSV результата импортирован в выбранную сторону анализа.");
   }
 
@@ -108,6 +147,10 @@ export function FreeMoCapPipelinePanel({ onImportCsv }: Props) {
       <div className="pipeline-status">
         <strong>{job ? `Job ${job.status}` : "Нет активной задачи"}</strong>
         <span>{job?.fileName || message}</span>
+        {uploadProgress !== undefined && uploadProgress < 100 && (
+          <ProgressRow label="Загрузка видео" progress={uploadProgress} />
+        )}
+        {job && <ProgressRow label={job.phase || "Обработка FreeMoCap"} progress={job.progress} />}
         {job?.error && <span className="warning">{job.error}</span>}
         {job && ["queued", "running"].includes(job.status) && (
           <button onClick={refreshJobStatus}>Проверить статус</button>
@@ -118,5 +161,20 @@ export function FreeMoCapPipelinePanel({ onImportCsv }: Props) {
         {job && <span className="muted">{message}</span>}
       </div>
     </section>
+  );
+}
+
+function ProgressRow({ label, progress }: { label: string; progress: number }) {
+  const normalized = Math.max(0, Math.min(100, Math.round(progress || 0)));
+  return (
+    <div className="progress-row" aria-label={`${label}: ${normalized}%`}>
+      <div className="progress-meta">
+        <span>{label}</span>
+        <strong>{normalized}%</strong>
+      </div>
+      <div className="progress-track">
+        <span style={{ width: `${normalized}%` }} />
+      </div>
+    </div>
   );
 }
