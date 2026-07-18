@@ -13,14 +13,20 @@ type Props = {
 const boneHints = [
   ["left_shoulder", "right_shoulder", 0.12],
   ["left_hip", "right_hip", 0.13],
+  ["left_shoulder", "left_hip", 0.1],
+  ["right_shoulder", "right_hip", 0.1],
   ["left_shoulder", "left_elbow", 0.08],
   ["left_elbow", "left_wrist", 0.065],
   ["right_shoulder", "right_elbow", 0.08],
   ["right_elbow", "right_wrist", 0.065],
   ["left_hip", "left_knee", 0.09],
   ["left_knee", "left_ankle", 0.075],
+  ["left_ankle", "left_heel", 0.045],
+  ["left_ankle", "left_foot_index", 0.045],
   ["right_hip", "right_knee", 0.09],
   ["right_knee", "right_ankle", 0.075],
+  ["right_ankle", "right_heel", 0.045],
+  ["right_ankle", "right_foot_index", 0.045],
 ] as const;
 
 const visibleJoints = [
@@ -103,19 +109,67 @@ function averageX(frame: MotionCapFrame, hints: string[], fallback: number) {
   return points.reduce((sum, point) => sum + point.x, 0) / points.length;
 }
 
+function pointDistance2d(frame: MotionCapFrame, from: string, to: string) {
+  const a = pointLookup(frame, from);
+  const b = pointLookup(frame, to);
+  if (!a || !b) return frameBodyScale(frame) * 0.2;
+  return Math.hypot(a.x - b.x, a.z - b.z);
+}
+
+function clampDepthToParent(depth: number, parentDepth: number, frame: MotionCapFrame, from: string, to: string) {
+  const maxDelta = Math.max(1, pointDistance2d(frame, from, to) * 0.55);
+  return THREE.MathUtils.clamp(depth, parentDepth - maxDelta, parentDepth + maxDelta);
+}
+
+function estimatedDepthForHint(frame: MotionCapFrame, hint: string): number {
+  const scale = frameBodyScale(frame);
+  const point = pointLookup(frame, hint);
+  const centerX = averageX(frame, ["left_shoulder", "right_shoulder", "left_hip", "right_hip"], point?.x ?? 0);
+  const sideSign = hint.includes("left") ? 1 : hint.includes("right") ? -1 : 0;
+  const centerPull = point ? Math.max(0, 1 - Math.min(1, Math.abs(point.x - centerX) / Math.max(1, scale * 0.28))) : 0;
+
+  if (hint === "nose") return 0;
+  if (hint.includes("shoulder") || hint.includes("hip")) return sideSign * scale * 0.035;
+  if (hint.includes("elbow")) {
+    const parent = hint.startsWith("left") ? "left_shoulder" : "right_shoulder";
+    const target = estimatedDepthForHint(frame, parent) + scale * (0.04 + centerPull * 0.16);
+    return clampDepthToParent(target, estimatedDepthForHint(frame, parent), frame, parent, hint);
+  }
+  if (hint.includes("wrist")) {
+    const parent = hint.startsWith("left") ? "left_elbow" : "right_elbow";
+    const target = estimatedDepthForHint(frame, parent) + scale * (0.05 + centerPull * 0.16);
+    return clampDepthToParent(target, estimatedDepthForHint(frame, parent), frame, parent, hint);
+  }
+  if (hint.includes("knee")) {
+    const parent = hint.startsWith("left") ? "left_hip" : "right_hip";
+    const target = estimatedDepthForHint(frame, parent) - scale * (0.02 + centerPull * 0.06);
+    return clampDepthToParent(target, estimatedDepthForHint(frame, parent), frame, parent, hint);
+  }
+  if (hint.includes("ankle")) {
+    const parent = hint.startsWith("left") ? "left_knee" : "right_knee";
+    const target = estimatedDepthForHint(frame, parent) - scale * (0.015 + centerPull * 0.05);
+    return clampDepthToParent(target, estimatedDepthForHint(frame, parent), frame, parent, hint);
+  }
+  if (hint.includes("heel") || hint.includes("foot")) {
+    const parent = hint.startsWith("left") ? "left_ankle" : "right_ankle";
+    const target = estimatedDepthForHint(frame, parent) - scale * 0.025;
+    return clampDepthToParent(target, estimatedDepthForHint(frame, parent), frame, parent, hint);
+  }
+
+  return sideSign * scale * 0.035;
+}
+
 function inferredDepth(frame: MotionCapFrame, point: MotionCapPoint) {
   if (hasMeasuredDepth(frame)) return point.y * 0.55;
   const name = point.name.toLowerCase();
-  const scale = frameBodyScale(frame);
-  const centerX = averageX(frame, ["left_shoulder", "right_shoulder", "left_hip", "right_hip"], point.x);
   const sideSign = name.includes("left") ? 1 : name.includes("right") ? -1 : 0;
-  const centerPull = Math.max(0, 1 - Math.min(1, Math.abs(point.x - centerX) / Math.max(1, scale * 0.26)));
-  const sideDepth = sideSign * scale * 0.06;
-
-  if (/wrist|hand|thumb|index|middle|ring|pinky/.test(name)) return sideDepth + scale * (0.08 + centerPull * 0.34);
-  if (/elbow/.test(name)) return sideDepth + scale * (0.05 + centerPull * 0.2);
-  if (/knee|ankle|heel|foot/.test(name)) return sideDepth - scale * (0.02 + centerPull * 0.12);
-  if (/shoulder|hip/.test(name)) return sideSign * scale * 0.045;
+  const knownHint = visibleJoints.find((hint) => point.name.toLowerCase().includes(hint));
+  if (knownHint) return estimatedDepthForHint(frame, knownHint);
+  if (/thumb|index|middle|ring|pinky|hand/.test(name)) {
+    const wrist = sideSign > 0 ? "left_wrist" : "right_wrist";
+    return estimatedDepthForHint(frame, wrist) + sideSign * frameBodyScale(frame) * 0.015;
+  }
+  if (name.includes("face")) return estimatedDepthForHint(frame, "nose");
   return 0;
 }
 
