@@ -68,7 +68,7 @@ function pointLookup(frame: MotionCapFrame, hint: string): MotionCapPoint | unde
 }
 
 function toVec(point: MotionCapPoint, bounds: Bounds) {
-  const raw = new THREE.Vector3(point.x, -point.z, point.y * 0.55);
+  const raw = new THREE.Vector3(point.x, point.z, point.y * 0.55);
   return raw.sub(bounds.center).multiplyScalar(bounds.scale);
 }
 
@@ -97,7 +97,7 @@ function createBounds(dataset: MotionCapDataset | undefined): Bounds {
       .filter((_, index) => index % stride === 0)
       .flatMap((frame) => visibleJoints.flatMap((hint) => {
         const point = pointLookup(frame, hint);
-        return point ? [new THREE.Vector3(point.x, -point.z, point.y * 0.55)] : [];
+        return point ? [new THREE.Vector3(point.x, point.z, point.y * 0.55)] : [];
       })) ?? [];
   if (!points.length) {
     return { minX: -1, maxX: 1, minY: -1, maxY: 1, minZ: -1, maxZ: 1, scale: 1, center: new THREE.Vector3() };
