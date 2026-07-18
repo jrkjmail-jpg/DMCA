@@ -9,6 +9,8 @@ import { spawn } from "node:child_process";
 const app = express();
 const port = Number(process.env.PORT || 8787);
 const dataRoot = resolve(process.env.DMCA_DATA_ROOT || "motioncap_jobs");
+const localFreeMoCapPython = "/Users/jrk/miniconda3/envs/freemocap-env/bin/python";
+const localFreeMoCapScript = resolve("scripts/process_freemocap_recording.py");
 const upload = multer({ dest: join(dataRoot, "incoming") });
 const jobs = new Map();
 
@@ -42,8 +44,13 @@ async function findMotionCapCsv(outputDir) {
 
 function commandForJob(job) {
   const template = process.env.FREEMOCAP_PROCESS_COMMAND;
-  if (!template) return undefined;
-  return template
+  const defaultTemplate =
+    existsSync(localFreeMoCapPython) && existsSync(localFreeMoCapScript)
+      ? `"${localFreeMoCapPython}" "${localFreeMoCapScript}" --recording "{recording}"`
+      : undefined;
+  const commandTemplate = template || defaultTemplate;
+  if (!commandTemplate) return undefined;
+  return commandTemplate
     .replaceAll("{input}", job.inputPath)
     .replaceAll("{recording}", job.recordingDir)
     .replaceAll("{output}", job.outputDir)
@@ -95,6 +102,7 @@ app.get("/api/health", (_request, response) => {
   response.json({
     ok: true,
     configured: Boolean(process.env.FREEMOCAP_PROCESS_COMMAND),
+    localFreeMoCapDetected: existsSync(localFreeMoCapPython) && existsSync(localFreeMoCapScript),
     dataRoot,
   });
 });
@@ -107,10 +115,12 @@ app.post("/api/freemocap/jobs", upload.single("video"), async (request, response
 
   const id = crypto.randomUUID();
   const recordingDir = jobPath(id, "recording");
-  const outputDir = jobPath(id, "output_data");
+  const synchronizedVideosDir = join(recordingDir, "synchronized_videos");
+  const outputDir = join(recordingDir, "output_data");
   await mkdir(recordingDir, { recursive: true });
+  await mkdir(synchronizedVideosDir, { recursive: true });
   await mkdir(outputDir, { recursive: true });
-  const inputPath = join(recordingDir, request.file.originalname);
+  const inputPath = join(synchronizedVideosDir, request.file.originalname);
   await writeFile(inputPath, await readFile(request.file.path));
   await rm(request.file.path, { force: true });
 

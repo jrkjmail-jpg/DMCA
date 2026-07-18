@@ -22,7 +22,11 @@ export function FreeMoCapPipelinePanel({ onImportCsv }: Props) {
     getFreeMoCapBackendStatus()
       .then((next) => {
         setStatus(next);
-        setMessage(next.configured ? "Backend готов к запуску FreeMoCap pipeline." : "Backend работает, но команда FreeMoCap pipeline еще не настроена.");
+        setMessage(
+          next.configured || next.localFreeMoCapDetected
+            ? "Backend готов к запуску локального FreeMoCap pipeline."
+            : "Backend работает, но команда FreeMoCap pipeline еще не настроена.",
+        );
       })
       .catch(() => setMessage("Backend не запущен. Для обработки видео нужен `npm run api`."));
   }, []);
@@ -58,7 +62,9 @@ export function FreeMoCapPipelinePanel({ onImportCsv }: Props) {
     <section className="panel pipeline-panel">
       <div className="panel-title-row">
         <h2>Обработка видео через FreeMoCap</h2>
-        <span className={status?.configured ? "backend-ok" : "backend-warn"}>{status?.configured ? "configured" : "local backend"}</span>
+        <span className={status?.configured || status?.localFreeMoCapDetected ? "backend-ok" : "backend-warn"}>
+          {status?.configured || status?.localFreeMoCapDetected ? "FreeMoCap ready" : "local backend"}
+        </span>
       </div>
       <p className="muted">
         Загрузи видео сюда, если хочешь получить MotionCap CSV автоматически. Это работает через локальный/server backend, не внутри Cloudflare Pages.

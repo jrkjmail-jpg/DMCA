@@ -1,6 +1,7 @@
 export type FreeMoCapBackendStatus = {
   ok: boolean;
   configured: boolean;
+  localFreeMoCapDetected?: boolean;
   dataRoot: string;
 };
 

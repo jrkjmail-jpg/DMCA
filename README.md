@@ -40,6 +40,15 @@ Available placeholders:
 
 After the command finishes, the backend looks for `mediapipe_body_3d_xyz.csv`, `body_3d_xyz.csv`, or `*_by_frame.csv` and lets the frontend import it into the analysis.
 
+On JRK's local Mac, the backend auto-detects:
+
+```text
+/Users/jrk/miniconda3/envs/freemocap-env/bin/python
+scripts/process_freemocap_recording.py
+```
+
+So `npm run api` can process a single uploaded video by creating a FreeMoCap-style recording folder with `synchronized_videos/`, running the headless pipeline, and importing the generated CSV.
+
 ## Validation
 
 ```bash
