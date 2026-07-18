@@ -67,8 +67,60 @@ function pointLookup(frame: MotionCapFrame, hint: string): MotionCapPoint | unde
   return Object.values(frame.points).find((point) => point.name.toLowerCase().includes(hint));
 }
 
-function toVec(point: MotionCapPoint, bounds: Bounds) {
-  const raw = new THREE.Vector3(point.x, point.z, point.y * 0.55);
+function visiblePoints(frame: MotionCapFrame) {
+  return visibleJoints.flatMap((hint) => {
+    const point = pointLookup(frame, hint);
+    return point ? [point] : [];
+  });
+}
+
+function hasMeasuredDepth(frame: MotionCapFrame) {
+  const points = visiblePoints(frame);
+  if (!points.length) return false;
+  const values = points.map((point) => point.y);
+  return Math.max(...values) - Math.min(...values) > 1;
+}
+
+function datasetHasMeasuredDepth(dataset: MotionCapDataset | undefined) {
+  const stride = Math.max(1, Math.floor((dataset?.frameCount ?? 0) / 24));
+  return dataset?.frames.some((frame, index) => index % stride === 0 && hasMeasuredDepth(frame)) ?? false;
+}
+
+function frameBodyScale(frame: MotionCapFrame) {
+  const points = visiblePoints(frame);
+  if (!points.length) return 1;
+  const xs = points.map((point) => point.x);
+  const zs = points.map((point) => point.z);
+  return Math.max(1, Math.max(...xs) - Math.min(...xs), Math.max(...zs) - Math.min(...zs));
+}
+
+function averageX(frame: MotionCapFrame, hints: string[], fallback: number) {
+  const points = hints.flatMap((hint) => {
+    const point = pointLookup(frame, hint);
+    return point ? [point] : [];
+  });
+  if (!points.length) return fallback;
+  return points.reduce((sum, point) => sum + point.x, 0) / points.length;
+}
+
+function inferredDepth(frame: MotionCapFrame, point: MotionCapPoint) {
+  if (hasMeasuredDepth(frame)) return point.y * 0.55;
+  const name = point.name.toLowerCase();
+  const scale = frameBodyScale(frame);
+  const centerX = averageX(frame, ["left_shoulder", "right_shoulder", "left_hip", "right_hip"], point.x);
+  const sideSign = name.includes("left") ? 1 : name.includes("right") ? -1 : 0;
+  const centerPull = Math.max(0, 1 - Math.min(1, Math.abs(point.x - centerX) / Math.max(1, scale * 0.26)));
+  const sideDepth = sideSign * scale * 0.06;
+
+  if (/wrist|hand|thumb|index|middle|ring|pinky/.test(name)) return sideDepth + scale * (0.08 + centerPull * 0.34);
+  if (/elbow/.test(name)) return sideDepth + scale * (0.05 + centerPull * 0.2);
+  if (/knee|ankle|heel|foot/.test(name)) return sideDepth - scale * (0.02 + centerPull * 0.12);
+  if (/shoulder|hip/.test(name)) return sideSign * scale * 0.045;
+  return 0;
+}
+
+function toVec(point: MotionCapPoint, frame: MotionCapFrame, bounds: Bounds) {
+  const raw = new THREE.Vector3(point.x, point.z, inferredDepth(frame, point));
   return raw.sub(bounds.center).multiplyScalar(bounds.scale);
 }
 
@@ -97,7 +149,7 @@ function createBounds(dataset: MotionCapDataset | undefined): Bounds {
       .filter((_, index) => index % stride === 0)
       .flatMap((frame) => visibleJoints.flatMap((hint) => {
         const point = pointLookup(frame, hint);
-        return point ? [new THREE.Vector3(point.x, point.z, point.y * 0.55)] : [];
+        return point ? [new THREE.Vector3(point.x, point.z, inferredDepth(frame, point))] : [];
       })) ?? [];
   if (!points.length) {
     return { minX: -1, maxX: 1, minY: -1, maxY: 1, minZ: -1, maxZ: 1, scale: 1, center: new THREE.Vector3() };
@@ -142,7 +194,7 @@ function drawMannequin(group: THREE.Group, frame: MotionCapFrame, side: Side, bo
   const ghostMaterial = new THREE.MeshStandardMaterial({ color: palette.ghost, roughness: 0.8, transparent: true, opacity: 0.42 });
   const vec = (hint: string) => {
     const point = pointLookup(frame, hint);
-    return point ? toVec(point, bounds) : undefined;
+    return point ? toVec(point, frame, bounds) : undefined;
   };
 
   const leftShoulder = vec("left_shoulder");
@@ -156,7 +208,7 @@ function drawMannequin(group: THREE.Group, frame: MotionCapFrame, side: Side, bo
     const torsoHeight = Math.max(0.55, leftShoulder.distanceTo(leftHip) * 0.98);
     const torsoWidth = Math.max(0.3, leftShoulder.distanceTo(rightShoulder) * 0.86);
     const torso = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), bodyMaterial);
-    torso.scale.set(torsoWidth * 0.75, torsoHeight * 0.58, 0.22);
+    torso.scale.set(torsoWidth * 0.75, torsoHeight * 0.58, 0.34);
     torso.position.copy(torsoCenter);
     group.add(torso);
   }
@@ -179,7 +231,7 @@ function drawMannequin(group: THREE.Group, frame: MotionCapFrame, side: Side, bo
     Object.values(frame.points)
       .filter((point) => handHints.some((hint) => point.name.toLowerCase().includes(hint)))
       .slice(0, 60)
-      .forEach((point) => addSphere(group, toVec(point, bounds), 0.028, ghostMaterial));
+      .forEach((point) => addSphere(group, toVec(point, frame, bounds), 0.028, ghostMaterial));
   }
 
   if (detail > 120) {
@@ -187,7 +239,7 @@ function drawMannequin(group: THREE.Group, frame: MotionCapFrame, side: Side, bo
       .filter((point) => point.name.toLowerCase().includes("face"))
       .filter((_, index) => index % 8 === 0)
       .slice(0, 70)
-      .forEach((point) => addSphere(group, toVec(point, bounds), 0.018, ghostMaterial));
+      .forEach((point) => addSphere(group, toVec(point, frame, bounds), 0.018, ghostMaterial));
   }
 }
 
@@ -317,6 +369,7 @@ function ThreeStage({
   } | undefined>(undefined);
   const dragRef = useRef<{ x: number; rotation: number } | null>(null);
   const bounds = useMemo(() => createBounds(dataset), [dataset]);
+  const depthMode = useMemo(() => (dataset ? (datasetHasMeasuredDepth(dataset) ? "реальная глубина" : "оценочная глубина") : "нет данных"), [dataset]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -390,7 +443,7 @@ function ThreeStage({
     <div className="viewer-stage">
       <div className="viewer-stage-title">
         <strong>{title}</strong>
-        <span>{dataset ? `${dataset.pointCount} точек · ${dataset.frameCount} кадров` : "нет данных"}</span>
+        <span>{dataset ? `${dataset.pointCount} точек · ${dataset.frameCount} кадров · ${depthMode}` : "нет данных"}</span>
       </div>
       <div
         className="three-stage"
