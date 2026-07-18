@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import type { MotionCapDataset, MotionCapFrame, MotionCapPoint } from "../dataset/motionCapSchema";
+import type { AudioSyncState, MotionCapDataset, MotionCapFrame, MotionCapPoint } from "../dataset/motionCapSchema";
 
 type Side = "left" | "right";
 
 type Props = {
   left?: MotionCapDataset;
   right?: MotionCapDataset;
+  sync: AudioSyncState;
 };
 
 const boneHints = [
@@ -31,9 +32,10 @@ type ProjectedPoint = {
 type Viewport = {
   minX: number;
   minY: number;
+  width: number;
+  height: number;
   scale: number;
   padding: number;
-  height: number;
 };
 
 type DrawPalette = {
@@ -72,30 +74,75 @@ function projectRaw(point: MotionCapPoint, rotation: number): ProjectedPoint {
   return { x, y: z - point.y * 0.18 };
 }
 
-function createViewport(frame: MotionCapFrame | undefined, width: number, height: number, rotation: number, zoom: number): Viewport {
-  const points = frame ? Object.values(frame.points).map((point) => projectRaw(point, rotation)) : [];
-  if (!points.length) return { minX: -1, minY: -1, scale: 1, padding: 34, height };
+function frameTime(dataset: MotionCapDataset | undefined, frameIndex: number) {
+  const frame = dataset?.frames[Math.min(frameIndex, Math.max(0, (dataset?.frameCount ?? 1) - 1))];
+  return frame?.time ?? frameIndex / (dataset?.fps || 30);
+}
+
+function nearestFrameByTime(dataset: MotionCapDataset | undefined, time: number) {
+  if (!dataset?.frames.length) return undefined;
+  let best = dataset.frames[0];
+  let bestDistance = Math.abs((best.time ?? best.frame / (dataset.fps || 30)) - time);
+  for (const frame of dataset.frames) {
+    const distance = Math.abs((frame.time ?? frame.frame / (dataset.fps || 30)) - time);
+    if (distance >= bestDistance) continue;
+    best = frame;
+    bestDistance = distance;
+  }
+  return best;
+}
+
+function createStableViewport(dataset: MotionCapDataset | undefined, width: number, height: number, rotation: number, zoom: number): Viewport {
+  const stride = Math.max(1, Math.floor((dataset?.frameCount ?? 0) / 90));
+  const frames = dataset?.frames.filter((_, index) => index % stride === 0) ?? [];
+  const bodyHints = [
+    "nose",
+    "left_shoulder",
+    "right_shoulder",
+    "left_elbow",
+    "right_elbow",
+    "left_wrist",
+    "right_wrist",
+    "left_hip",
+    "right_hip",
+    "left_knee",
+    "right_knee",
+    "left_ankle",
+    "right_ankle",
+  ];
+  const points = frames.flatMap((frame) =>
+    bodyHints.flatMap((hint) => {
+      const point = pointLookup(frame, hint);
+      return point ? [projectRaw(point, rotation)] : [];
+    }),
+  );
+  if (!points.length) return { minX: -1, minY: -1, width: 2, height: 2, scale: 1, padding: 34 };
   const minX = Math.min(...points.map((point) => point.x));
   const maxX = Math.max(...points.map((point) => point.x));
   const minY = Math.min(...points.map((point) => point.y));
   const maxY = Math.max(...points.map((point) => point.y));
-  const padding = 34;
-  const scaleX = (width - padding * 2) / Math.max(1, maxX - minX);
-  const scaleY = (height - padding * 2) / Math.max(1, maxY - minY);
+  const sceneWidth = Math.max(1, maxX - minX);
+  const sceneHeight = Math.max(1, maxY - minY);
+  const padding = 42;
+  const scaleX = (width - padding * 2) / sceneWidth;
+  const scaleY = (height - padding * 2) / sceneHeight;
   return {
     minX,
     minY,
+    width: sceneWidth,
+    height: sceneHeight,
     scale: Math.min(scaleX, scaleY) * (zoom / 100),
     padding,
-    height,
   };
 }
 
-function project(point: MotionCapPoint, viewport: Viewport, rotation: number) {
+function project(point: MotionCapPoint, viewport: Viewport, canvasWidth: number, canvasHeight: number, rotation: number) {
   const raw = projectRaw(point, rotation);
+  const centerX = viewport.minX + viewport.width / 2;
+  const centerY = viewport.minY + viewport.height / 2;
   return {
-    x: viewport.padding + (raw.x - viewport.minX) * viewport.scale,
-    y: viewport.height - viewport.padding - (raw.y - viewport.minY) * viewport.scale,
+    x: canvasWidth / 2 + (raw.x - centerX) * viewport.scale,
+    y: canvasHeight / 2 - (raw.y - centerY) * viewport.scale,
   };
 }
 
@@ -130,11 +177,61 @@ function drawEllipse(ctx: CanvasRenderingContext2D, point: ProjectedPoint, radiu
   ctx.restore();
 }
 
-function drawBodyFrame(ctx: CanvasRenderingContext2D, frame: MotionCapFrame, side: Side, viewport: Viewport, rotation: number) {
+function drawTorso(ctx: CanvasRenderingContext2D, points: ProjectedPoint[], palette: DrawPalette) {
+  if (points.length < 4) return;
+  ctx.save();
+  ctx.fillStyle = palette.bodyLight;
+  ctx.strokeStyle = palette.body;
+  ctx.lineWidth = 4;
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  points.slice(1).forEach((point) => ctx.lineTo(point.x, point.y));
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawFloor(ctx: CanvasRenderingContext2D, width: number, height: number, palette: DrawPalette) {
+  const horizon = height * 0.62;
+  ctx.save();
+  ctx.strokeStyle = "rgba(0, 0, 0, .08)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 8; i += 1) {
+    const y = horizon + (i / 8) * (height - horizon - 18);
+    ctx.beginPath();
+    ctx.moveTo(18, y);
+    ctx.lineTo(width - 18, y);
+    ctx.stroke();
+  }
+  for (let i = -4; i <= 4; i += 1) {
+    const x = width / 2 + i * (width / 10);
+    ctx.beginPath();
+    ctx.moveTo(width / 2, horizon);
+    ctx.lineTo(x, height - 18);
+    ctx.stroke();
+  }
+  ctx.fillStyle = palette.bodyLight;
+  ctx.beginPath();
+  ctx.ellipse(width / 2, height * 0.82, width * 0.18, 16, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBodyFrame(
+  ctx: CanvasRenderingContext2D,
+  frame: MotionCapFrame,
+  side: Side,
+  viewport: Viewport,
+  canvasWidth: number,
+  canvasHeight: number,
+  rotation: number,
+) {
   const palette = palettes[side];
   const projected = (hint: string) => {
     const point = pointLookup(frame, hint);
-    return point ? project(point, viewport, rotation) : undefined;
+    return point ? project(point, viewport, canvasWidth, canvasHeight, rotation) : undefined;
   };
 
   const leftShoulder = projected("left_shoulder");
@@ -142,31 +239,44 @@ function drawBodyFrame(ctx: CanvasRenderingContext2D, frame: MotionCapFrame, sid
   const leftHip = projected("left_hip");
   const rightHip = projected("right_hip");
   const nose = projected("nose");
+  const leftEar = projected("left_ear");
+  const rightEar = projected("right_ear");
 
-  if (leftShoulder && rightShoulder && leftHip && rightHip) {
-    const chest = {
-      x: (leftShoulder.x + rightShoulder.x + leftHip.x + rightHip.x) / 4,
-      y: (leftShoulder.y + rightShoulder.y + leftHip.y + rightHip.y) / 4,
-    };
-    const torsoWidth = Math.max(28, Math.abs(leftShoulder.x - rightShoulder.x) + 18);
-    const torsoHeight = Math.max(36, Math.abs((leftShoulder.y + rightShoulder.y) / 2 - (leftHip.y + rightHip.y) / 2) + 18);
-    drawEllipse(ctx, chest, torsoWidth / 2, torsoHeight / 2, palette);
+  if (leftShoulder && rightShoulder && rightHip && leftHip) drawTorso(ctx, [leftShoulder, rightShoulder, rightHip, leftHip], palette);
+
+  if (nose) {
+    const earWidth = leftEar && rightEar ? Math.max(16, Math.abs(leftEar.x - rightEar.x) * 0.75) : 16;
+    drawEllipse(ctx, nose, earWidth, 17, palette);
   }
-
-  if (nose) drawEllipse(ctx, nose, 13, 15, palette);
 
   for (const [from, to, width] of boneHints) {
     const a = projected(from);
     const b = projected(to);
     if (!a || !b) continue;
-    drawCapsule(ctx, a, b, width, palette);
+    drawCapsule(ctx, a, b, width * 0.62, palette);
   }
 
-  Object.values(frame.points).forEach((point) => {
-    const dot = project(point, viewport, rotation);
+  const visibleJoints = [
+    "nose",
+    "left_shoulder",
+    "right_shoulder",
+    "left_elbow",
+    "right_elbow",
+    "left_wrist",
+    "right_wrist",
+    "left_hip",
+    "right_hip",
+    "left_knee",
+    "right_knee",
+    "left_ankle",
+    "right_ankle",
+  ];
+  visibleJoints.forEach((hint) => {
+    const dot = projected(hint);
+    if (!dot) return;
     ctx.fillStyle = palette.joint;
     ctx.beginPath();
-    ctx.arc(dot.x, dot.y, 4, 0, Math.PI * 2);
+    ctx.arc(dot.x, dot.y, 4.2, 0, Math.PI * 2);
     ctx.fill();
   });
 }
@@ -187,23 +297,21 @@ function drawScene(
   canvas.height = rect.height * ratio;
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   ctx.clearRect(0, 0, rect.width, rect.height);
-  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--panel");
+  const palette = palettes[side];
+  const gradient = ctx.createLinearGradient(0, 0, 0, rect.height);
+  gradient.addColorStop(0, "#ffffff");
+  gradient.addColorStop(1, "#f3f6f5");
+  ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, rect.width, rect.height);
-  ctx.strokeStyle = "rgba(0,0,0,.14)";
-  ctx.beginPath();
-  ctx.moveTo(0, rect.height / 2);
-  ctx.lineTo(rect.width, rect.height / 2);
-  ctx.moveTo(rect.width / 2, 0);
-  ctx.lineTo(rect.width / 2, rect.height);
-  ctx.stroke();
+  drawFloor(ctx, rect.width, rect.height, palette);
 
   const frame = dataset?.frames[Math.min(frameIndex, Math.max(0, (dataset?.frameCount ?? 1) - 1))];
   if (!frame) return;
-  const viewport = createViewport(frame, rect.width, rect.height, rotation, zoom);
-  drawBodyFrame(ctx, frame, side, viewport, rotation);
+  const viewport = createStableViewport(dataset, rect.width, rect.height, rotation, zoom);
+  drawBodyFrame(ctx, frame, side, viewport, rect.width, rect.height, rotation);
 }
 
-export function MotionCapViewer({ left, right }: Props) {
+export function MotionCapViewer({ left, right, sync }: Props) {
   const leftCanvasRef = useRef<HTMLCanvasElement>(null);
   const rightCanvasRef = useRef<HTMLCanvasElement>(null);
   const [frame, setFrame] = useState(0);
@@ -219,16 +327,18 @@ export function MotionCapViewer({ left, right }: Props) {
   }, [playing, maxFrames]);
 
   useEffect(() => {
+    const leftTime = frameTime(left, frame);
+    const rightFrameIndex = right?.frames.indexOf(nearestFrameByTime(right, leftTime + sync.offsetSeconds) ?? right.frames[frame] ?? right.frames[0]) ?? frame;
     drawScene(leftCanvasRef.current, left, "left", frame, zoom, rotation);
-    drawScene(rightCanvasRef.current, right, "right", frame, zoom, rotation);
-  }, [left, right, frame, zoom, rotation]);
+    drawScene(rightCanvasRef.current, right, "right", Math.max(0, rightFrameIndex), zoom, rotation);
+  }, [left, right, frame, zoom, rotation, sync.offsetSeconds]);
 
   return (
     <section className="panel visualizer">
       <div className="panel-title-row">
         <h2>3D визуализация движений</h2>
         <span className="muted">
-          Эталон: {left ? `${left.frameCount} кадров` : "нет"} · Ученик: {right ? `${right.frameCount} кадров` : "нет"}
+          Эталон: {left ? `${left.frameCount} кадров` : "нет"} · Ученик: {right ? `${right.frameCount} кадров` : "нет"} · sync {sync.offsetSeconds.toFixed(2)} c
         </span>
       </div>
       <div className="viewer-split">

@@ -134,8 +134,7 @@ export default function App() {
 
   function synchronizeAudio() {
     const estimate = estimateAudioOffset(media.left.audioWaveform, media.right.audioWaveform);
-    const duration = Math.max(left?.duration ?? 0, right?.duration ?? 0, 1);
-    const secondsPerBar = duration / Math.max(1, media.left.audioWaveform.length);
+    const secondsPerBar = media.left.audioWaveform.hopSeconds || Math.max(left?.duration ?? 0, right?.duration ?? 0, 1) / Math.max(1, media.left.audioWaveform.length);
     setSync({
       offsetSeconds: Number((estimate.offsetBars * secondsPerBar).toFixed(3)),
       confidence: estimate.confidence,
@@ -183,7 +182,7 @@ export default function App() {
           onSync={synchronizeAudio}
           onManualOffset={(offsetSeconds) => setSync({ offsetSeconds, method: "manual" })}
         />
-        <MotionCapViewer left={left} right={right} />
+        <MotionCapViewer left={left} right={right} sync={sync} />
         <ResultPanel result={result} onSave={saveAnalysis} />
         <HistoryPanel
           records={history}
