@@ -183,7 +183,7 @@ function commandForJob(job) {
   const template = process.env.FREEMOCAP_PROCESS_COMMAND;
   const defaultTemplate =
     existsSync(localFreeMoCapPython) && existsSync(localFreeMoCapScript)
-      ? `"${localFreeMoCapPython}" "${localFreeMoCapScript}" --recording "{recording}"`
+      ? `"${localFreeMoCapPython}" "${localFreeMoCapScript}" --recording "{recording}" --preserve-single-camera-depth`
       : undefined;
   const commandTemplate = template || defaultTemplate;
   if (!commandTemplate) return undefined;
@@ -290,6 +290,7 @@ app.post("/api/freemocap/jobs", upload.single("video"), async (request, response
     status: "queued",
     fileName: originalFileName,
     processingFileName: inputFileName,
+    depthMode: "single-camera-estimated",
     progress: 8,
     phase: "Видео принято",
     inputPath,
@@ -350,6 +351,7 @@ function safeJob(job) {
     finishedAt: job.finishedAt,
     error: job.error,
     csvFileName: job.csvFileName,
+    depthMode: job.depthMode,
     resultUrl: job.csvPath ? `/api/freemocap/jobs/${job.id}/result.csv` : undefined,
   };
 }
