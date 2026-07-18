@@ -17,6 +17,29 @@ npm install
 npm run dev
 ```
 
+## Optional FreeMoCap Video Backend
+
+The Cloudflare Pages frontend is static and cannot run the Python FreeMoCap pipeline by itself. To process videos, run the optional API backend on a machine where FreeMoCap is installed.
+
+```bash
+npm run api
+```
+
+The backend accepts video uploads and manages processing jobs. Set `FREEMOCAP_PROCESS_COMMAND` to the command that runs your local FreeMoCap processing workflow:
+
+```bash
+FREEMOCAP_PROCESS_COMMAND='your-command --input "{input}" --output "{output}"' npm run api
+```
+
+Available placeholders:
+
+- `{input}` uploaded video path
+- `{recording}` job recording folder
+- `{output}` expected output folder
+- `{jobId}` job id
+
+After the command finishes, the backend looks for `mediapipe_body_3d_xyz.csv`, `body_3d_xyz.csv`, or `*_by_frame.csv` and lets the frontend import it into the analysis.
+
 ## Validation
 
 ```bash

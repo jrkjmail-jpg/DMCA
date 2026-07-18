@@ -3,6 +3,7 @@ import { AppHeader } from "./components/AppHeader";
 import { AudioSyncTimeline } from "./components/AudioSyncTimeline";
 import { DataSourcePanel } from "./components/DataSourcePanel";
 import { HistoryPanel } from "./components/HistoryPanel";
+import { FreeMoCapPipelinePanel } from "./components/FreeMoCapPipelinePanel";
 import { ModelsPanel } from "./components/ModelsPanel";
 import { MotionCapSettingsPanel } from "./components/MotionCapSettingsPanel";
 import { MotionCapUploadPane } from "./components/MotionCapUploadPane";
@@ -70,6 +71,12 @@ export default function App() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Не удалось прочитать файл данных.");
     }
+  }
+
+  function importPipelineCsv(side: Side, fileName: string, text: string) {
+    const parsed = parseFreeMoCapCsv(fileName, text);
+    if (side === "left") setLeft(parsed);
+    else setRight(parsed);
   }
 
   function handleVideoFile(side: Side, file: File) {
@@ -168,6 +175,7 @@ export default function App() {
             onAudioFile={(file) => handleAudioFile("right", file)}
           />
         </div>
+        <FreeMoCapPipelinePanel onImportCsv={importPipelineCsv} />
         <AudioSyncTimeline
           leftWaveform={media.left.audioWaveform}
           rightWaveform={media.right.audioWaveform}

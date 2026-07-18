@@ -47,6 +47,15 @@ input[type="file"] {
   max-width: 100%;
 }
 
+select {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+}
+
 .app-shell {
   min-height: 100vh;
 }
@@ -221,7 +230,8 @@ video {
 }
 
 .sync-controls,
-.viewer-controls {
+.viewer-controls,
+.pipeline-controls {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
@@ -229,8 +239,44 @@ video {
   margin-top: 12px;
 }
 
-.sync-controls input {
+.sync-controls input,
+.pipeline-controls select {
   width: 120px;
+}
+
+.pipeline-controls label {
+  display: grid;
+  gap: 6px;
+  min-width: min(100%, 240px);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.pipeline-status {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  background: #f9faf9;
+}
+
+.backend-ok,
+.backend-warn {
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-size: 13px;
+}
+
+.backend-ok {
+  background: color-mix(in srgb, var(--accent), #ffffff 84%);
+  color: #0c3d35;
+}
+
+.backend-warn {
+  background: #fff5d8;
+  color: #6f4a00;
 }
 
 .visualizer {
